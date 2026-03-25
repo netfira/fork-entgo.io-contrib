@@ -14,18 +14,15 @@ in the LICENSE file in the root directory of this source tree.
 {{ $gqlNodes := filterNodes $.Nodes (skipMode "type") }}
 
 import (
-	"github.com/99designs/gqlgen/graphql"
+	"entgo.io/contrib/entgql"
 	{{- range $n := $gqlNodes }}
 		"{{ $.Config.Package }}/{{ $n.Package }}"
 	{{- end }}
 )
 
-{{ range $node := $gqlNodes }}
-{{ $names := nodePaginationNames $node }}
-{{ $name := $names.Node }}
-
-{{ $receiver := $node.Receiver }}
-{{ $query := $node.QueryName }}
+{{ range $node := $gqlNodes -}}
+{{- $query := $node.QueryName -}}
+{{- $receiver := $node.QueryReceiver -}}
 // CollectFields tells the query-builder to eagerly load connected nodes by resolver context.
 func ({{ $receiver }} *{{ $query }}) CollectFields(ctx context.Context, satisfies ...string) (*{{ $query }}, error) {
 	fc := graphql.GetFieldContext(ctx)
@@ -154,7 +151,13 @@ func ({{ $receiver }} *{{ $query }}) collectField(ctx context.Context, oneNode b
 						{{- end }}
 				{{- end }}
 				{{- range $f := $fields }}
-					{{- with fieldMapping $f }}
+					{{- $mapping := fieldMapping $f }}
+					{{- range fieldCollectedFor $f }}
+						{{- if eq (indexOf $mapping .) -1 }}
+							{{- $mapping = append $mapping . }}
+						{{- end }}
+					{{- end }}
+					{{- with $mapping }}
 						case {{ range $i, $m := . }}{{ if $i }}, {{ end }}"{{ $m }}"{{ end }}:
 							if _, ok := fieldSeen[{{ $node.Package }}.{{ $f.Constant }}]; !ok {
 								selectedFields = append(selectedFields, {{ $node.Package }}.{{ $f.Constant }})
@@ -184,13 +187,14 @@ func ({{ $receiver }} *{{ $query }}) collectField(ctx context.Context, oneNode b
 	return nil
 }
 
-{{ $order := $names.Order }}
-{{ $multiOrder := $node.Annotations.EntGQL.MultiOrder }}
-{{ $orderField := $names.OrderField }}
-{{ $filter := print "With" $name "Filter" }}
-{{ $paginateArg := print (camel $name) "PaginateArgs" }}
-{{ $newPaginateArg := print "new" $name "PaginateArgs" }}
-
+{{ $names := nodePaginationNames $node -}}
+{{- $name := $names.Node -}}
+{{- $filter := print "With" $name "Filter" -}}
+{{- $paginateArg := print (camel $name) "PaginateArgs" -}}
+{{- $newPaginateArg := print "new" $name "PaginateArgs" -}}
+{{- $order := $names.Order -}}
+{{- $multiOrder := $node.Annotations.EntGQL.MultiOrder -}}
+{{- $orderField := $names.OrderField -}}
 type {{ $paginateArg }} struct {
 	first, last *int
 	after, before *Cursor
@@ -298,7 +302,7 @@ func fieldArgs(ctx context.Context, whereInput any, path ...string) map[string]a
 func unmarshalArgs(ctx context.Context, whereInput any, args map[string]any) map[string]any {
 	for _, k := range []string{firstField, lastField} {
 		v, ok := args[k]
-		if !ok {
+		if !ok || v == nil {
 			continue
 		}
 		i, err := graphql.UnmarshalInt(v)
@@ -408,7 +412,7 @@ Cond:
 {{- end }}
 {{- define "dialect/sql/query/spec/internal_modify" }}
 	{{- if and ($.FeatureEnabled "sql/lock" | not) ($.FeatureEnabled "sql/modifier" | not) }}
-		{{- $receiver := pascal $.Scope.Builder | receiver }}
+		{{- $receiver := $.Scope.Receiver }}
 		if len({{ $receiver }}.modifiers) > 0 {
 			_spec.Modifiers = {{ $receiver }}.modifiers
 		}
@@ -420,8 +424,7 @@ Cond:
 	loadTotal []func(context.Context, []*{{ $.Name }}) error
 {{- end }}
 {{ define "dialect/sql/query/all/nodes/namedges_load_total" }}
-	{{- $builder := pascal $.Scope.Builder }}
-	{{- $receiver := receiver $builder }}
+	{{- $receiver := $.Scope.Receiver }}
 	for i := range {{ $receiver }}.loadTotal {
 		if err := {{ $receiver }}.loadTotal[i](ctx, nodes); err != nil {
 			return nil, err
